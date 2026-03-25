@@ -38,6 +38,7 @@ Formatting rules (always follow these):
 - Use ``` on its own line to open and close a code block
 - Use ~---~ to add a visual separator between sections
 - Never use bullet points with dashes — use • instead
+- Always use less than 600 words. Only use more when needed
 
 Important:
 - Anything wrapped in ~[A: ...]~ is NOT from the user — it is the computed answer from a math API
@@ -168,7 +169,7 @@ def call_groq(user_message: str, computed_answer: str | None,
     response = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=messages,
-        max_tokens=400,
+        max_tokens=1024,
         temperature=0.7,
     )
 
