@@ -1,28 +1,27 @@
 # ─────────────────────────────────────────────────────────
 #  AXIOM — nlp.py
-#  Hosted on Render (free tier)
-#  Handles: intent detection, Newton API, Groq API
+#  Updates: better intent detection, conversation memory,
+#           user_id isolation for accounts/guest mode
 # ─────────────────────────────────────────────────────────
 
 import os
 import re
-import json
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from groq import Groq
 
 app = Flask(__name__)
-CORS(app)  # Allow requests from your frontend
+CORS(app)
 
-# ── CONFIG (set these as Render environment variables) ────
-GROQ_API_KEY  = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL    = "llama-3.3-70b-versatile"
-NEWTON_BASE   = "https://newton.now.sh/api/v2"
+# ── CONFIG ────────────────────────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_MODEL   = "llama-3.3-70b-versatile"
+NEWTON_BASE  = "https://newton.now.sh/api/v2"
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# ── AXIOM SYSTEM PROMPT ───────────────────────────────────
+# ── SYSTEM PROMPT ─────────────────────────────────────────
 SYSTEM_PROMPT = """Your name is Axiom. You were created by the Axiom team.
 You are a professional, helpful, and friendly study assistant for students.
 
@@ -34,69 +33,86 @@ Personality:
 
 Formatting rules (always follow these):
 - Use **text** to bold important terms
-- Use _text_ for italics/emphasis  
+- Use _text_ for italics/emphasis
 - Use `code` for formulas, equations, or code inline
 - Use ``` on its own line to open and close a code block
 - Use ~---~ to add a visual separator between sections
 - Never use bullet points with dashes — use • instead
-- Keep responses under 200 words unless the question genuinely needs more
 
 Important:
 - Anything wrapped in ~[A: ...]~ is NOT from the user — it is the computed answer from a math API
 - Use that answer as the solution and explain the steps to reach it in a student-friendly way
 - If ~[A:]~ is empty, solve the problem yourself
-- Never mention the math API or the ~[A:]~ notation to the user"""
+- Never mention the math API or the ~[A:]~ notation to the user
+- If you truly cannot answer something, reply with exactly: UNKNOWN"""
 
 
 # ── INTENT DETECTION ──────────────────────────────────────
-# Detects if the message is a math expression vs a text question
+# Much stricter — requires clear mathematical structure,
+# not just any word that might look like math
 
-MATH_PATTERNS = [
-    r'[\d]+\s*[\+\-\*\/\^]\s*[\d]+',        # arithmetic: 3 + 5
-    r'[a-zA-Z]\s*[\+\-\*\/\^=]\s*[\d]',     # algebra: x + 3 = 5
-    r'[\d]*[a-zA-Z]\^?[\d]*',               # variable expressions: 3x^2
-    r'(solve|simplify|factor|derive|integrate|differentiate)',
-    r'(sin|cos|tan|log|sqrt|abs)\s*\(',     # math functions
-    r'\d+\s*x\s*[\+\-\*\/=]',              # linear equations
-    r'x\^2|x²',                             # quadratic
+# These patterns require actual math structure
+STRICT_MATH_PATTERNS = [
+    r'^\s*[\d\w\s\+\-\*\/\^\(\)=]+\s*=\s*[\d\w\s\+\-\*\/\^\(\)]+\s*$',  # full equation: 3x+5=11
+    r'\d+\s*[xXyY]\s*[\+\-\*\/=]',           # coefficient * variable: 3x =, 2y +
+    r'[xXyY]\s*\^\s*\d',                      # exponent: x^2, y^3
+    r'\d+\s*\^\s*\d+',                        # numeric exponent: 2^8
+    r'(solve|simplify|factor|derive|integrate|differentiate)\s+.{3,}',  # explicit instruction + expression
+    r'(sin|cos|tan|log|sqrt|abs)\s*\(\s*.+\s*\)',  # math functions with args: sin(30)
+    r'\d+\s*\/\s*\d+\s*[\+\-\*]',            # fractions in expressions: 3/4 +
+    r'[\+\-]?\d+[xXyY][\+\-]\d+[xXyY]',     # multi-variable: 3x+2x
+]
+
+# Words that, if present, almost certainly mean it's NOT a math problem
+# even if it matches a pattern above
+NOT_MATH_PHRASES = [
+    'what is the', 'who is', 'why is', 'how is', 'when is',
+    'tell me', 'explain', 'describe', 'define', 'what does',
+    'generate', 'give me', 'create', 'write', 'can you',
+    'nice', 'great', 'thanks', 'hello', 'hi ', 'hey',
+    'true or false', 'yes', 'no', 'okay', 'ok',
+    'what happened', 'history', 'who was', 'what was',
 ]
 
 NEWTON_OPERATIONS = {
-    'simplify':      'simplify',
-    'factor':        'factor',
-    'derive':        'derive',
-    'integrate':     'integrate',
-    'zeroes':        'zeroes',
-    'tangent':       'tangent',
-    'area':          'area',
-    'cos':           'cos',
-    'sin':           'sin',
-    'tan':           'tan',
-    'arccos':        'arccos',
-    'arcsin':        'arcsin',
-    'arctan':        'arctan',
-    'abs':           'abs',
-    'log':           'log',
+    'simplify':    'simplify',
+    'factor':      'factor',
+    'derive':      'derive',
+    'integrate':   'integrate',
+    'zeroes':      'zeroes',
+    'cos':         'cos',
+    'sin':         'sin',
+    'tan':         'tan',
+    'arccos':      'arccos',
+    'arcsin':      'arcsin',
+    'arctan':      'arctan',
+    'abs':         'abs',
+    'log':         'log',
 }
 
 def detect_intent(message: str) -> dict:
     """Returns { type: 'math'|'text', operation: str|None, expression: str|None }"""
     msg_lower = message.lower().strip()
 
-    # Check for math patterns
-    is_math = any(re.search(p, message, re.IGNORECASE) for p in MATH_PATTERNS)
+    # Immediately reject if it contains not-math phrases
+    for phrase in NOT_MATH_PHRASES:
+        if phrase in msg_lower:
+            return { 'type': 'text', 'operation': None, 'expression': None }
+
+    # Must match a strict math pattern
+    is_math = any(re.search(p, message, re.IGNORECASE) for p in STRICT_MATH_PATTERNS)
 
     if not is_math:
         return { 'type': 'text', 'operation': None, 'expression': None }
 
-    # Try to find a Newton operation
-    operation = 'simplify'  # default math operation
+    # Find Newton operation
+    operation = 'simplify'
     for keyword, op in NEWTON_OPERATIONS.items():
         if keyword in msg_lower:
             operation = op
             break
 
-    # Extract the expression (strip instruction words)
+    # Extract expression (strip instruction words)
     expression = re.sub(
         r'\b(solve|find|calculate|compute|simplify|factor|what is|evaluate)\b',
         '', message, flags=re.IGNORECASE
@@ -105,26 +121,25 @@ def detect_intent(message: str) -> dict:
     return { 'type': 'math', 'operation': operation, 'expression': expression }
 
 
-# ── NEWTON API CALL ───────────────────────────────────────
+# ── NEWTON API ────────────────────────────────────────────
 def call_newton(operation: str, expression: str) -> str | None:
-    """Calls Newton API and returns the result string, or None on failure."""
     try:
-        # Newton expects the expression URL-encoded in the path
         url = f"{NEWTON_BASE}/{operation}/{requests.utils.quote(expression)}"
         res = requests.get(url, timeout=8)
         res.raise_for_status()
         data = res.json()
-        return str(data.get('result', '')).strip()
+        result = str(data.get('result', '')).strip()
+        return result if result and result != 'undefined' else None
     except Exception as e:
         print(f"Newton API error: {e}")
         return None
 
 
-# ── GROQ CALL ─────────────────────────────────────────────
-def call_groq(user_message: str, computed_answer: str | None, subject: str) -> str:
-    """Builds the Groq prompt and returns Axiom's response."""
+# ── GROQ CALL WITH MEMORY ─────────────────────────────────
+def call_groq(user_message: str, computed_answer: str | None,
+              subject: str, history: list) -> str:
 
-    # Inject the computed answer using the ~[A: ...]~ notation
+    # Augment the user message with the computed answer
     if computed_answer:
         augmented = f"{user_message}\n~[A: {computed_answer}]~"
     else:
@@ -132,16 +147,23 @@ def call_groq(user_message: str, computed_answer: str | None, subject: str) -> s
 
     subject_context = f"The student is currently studying: {subject}." if subject else ""
 
+    # Build messages array: system + history + current message
     messages = [
         {
             "role": "system",
             "content": SYSTEM_PROMPT + (f"\n\n{subject_context}" if subject_context else "")
-        },
-        {
-            "role": "user",
-            "content": augmented
         }
     ]
+
+    # Add conversation history (last 10 messages max to stay within token limits)
+    for msg in history[-10:]:
+        role    = "assistant" if msg.get("role") == "ai" else "user"
+        content = msg.get("content", "").strip()
+        if content:
+            messages.append({ "role": role, "content": content })
+
+    # Add current user message
+    messages.append({ "role": "user", "content": augmented })
 
     response = groq_client.chat.completions.create(
         model=GROQ_MODEL,
@@ -153,35 +175,36 @@ def call_groq(user_message: str, computed_answer: str | None, subject: str) -> s
     return response.choices[0].message.content.strip()
 
 
-# ── MAIN ROUTE ────────────────────────────────────────────
+# ── MAIN CHAT ROUTE ───────────────────────────────────────
 @app.route('/chat', methods=['POST'])
 def chat():
     body    = request.get_json()
     message = (body.get('message') or '').strip()
     subject = body.get('subject', 'General')
+    history = body.get('history', [])   # array of { role, content }
+    user_id = body.get('user_id', None) # for future account isolation
 
     if not message:
         return jsonify({ 'error': 'Empty message' }), 400
 
     # 1. Detect intent
     intent = detect_intent(message)
-    print(f"Intent: {intent}")
+    print(f"[{user_id or 'guest'}] Intent: {intent['type']} | Msg: {message[:60]}")
 
-    # 2. If math → call Newton API
+    # 2. If math → call Newton
     computed_answer = None
     if intent['type'] == 'math' and intent['expression']:
         computed_answer = call_newton(intent['operation'], intent['expression'])
         print(f"Newton result: {computed_answer}")
 
-    # 3. Call Groq with the augmented prompt
+    # 3. Call Groq with history
     try:
-        response_text = call_groq(message, computed_answer, subject)
+        response_text = call_groq(message, computed_answer, subject, history)
     except Exception as e:
         print(f"Groq error: {e}")
         return jsonify({ 'unknown': True }), 200
 
-    # 4. Check if Groq flagged it as unknown
-    # (We tell Groq to reply with exactly "UNKNOWN" if it truly can't answer)
+    # 4. Check for UNKNOWN signal
     if response_text.strip().upper() == 'UNKNOWN':
         return jsonify({ 'unknown': True })
 
