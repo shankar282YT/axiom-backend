@@ -1,16 +1,9 @@
-# ── NEVER push these ──
 js/config.js
 .env
 *.env
-
-# ── Python ──
 __pycache__/
 *.py[cod]
-*.pyo
 .venv/
 venv/
-env/
-
-# ── OS ──
 .DS_Store
 Thumbs.db
