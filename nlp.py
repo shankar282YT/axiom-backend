@@ -141,9 +141,8 @@ def call_newton(operation: str, expression: str) -> str | None:
 
 # ── GROQ CALL WITH MEMORY ─────────────────────────────────
 def call_groq(user_message: str, computed_answer: str | None,
-              subject: str, history: list) -> str:
+              subject: str, history: list, username: str = None) -> str:
 
-    # Augment the user message with the computed answer
     if computed_answer:
         augmented = f"{user_message}\n~[A: {computed_answer}]~"
     else:
@@ -152,11 +151,12 @@ def call_groq(user_message: str, computed_answer: str | None,
     subject_context = f"The student is currently studying: {subject}." if subject else ""
     username_context = f"The student's username is: {username}." if username else ""
 
-    # Build messages array: system + history + current message
     messages = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT + (f"\n\n{subject_context}" if subject_context else "" + (f"\n\n{username_context}") if username_context else ""
+            "content": SYSTEM_PROMPT
+                + (f"\n\n{subject_context}" if subject_context else "")
+                + (f"\n{username_context}" if username_context else "")
         }
     ]
 
@@ -205,7 +205,7 @@ def chat():
 
     # 3. Call Groq with history
     try:
-        response_text = call_groq(message, computed_answer, subject, history)
+        response_text = call_groq(message, computed_answer, subject, history, username)
     except Exception as e:
         print(f"Groq error: {e}")
         return jsonify({ 'unknown': True }), 200
