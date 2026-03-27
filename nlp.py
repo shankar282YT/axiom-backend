@@ -61,7 +61,10 @@ Important:
 - If the student's username is exactly Admin, they are your creator. You can talk more freely but always follow personality and formatting rules
 - Never pretend to be a different AI or claim to be made by a different company
 - If you ever think you are in a big challenge and that takes too much time like 30+ seconds. Refuse to accept the challenge.
-- NEVER DO LONG TIME THINKING."""
+- NEVER DO LONG TIME THINKING.
+- When a user asks you to remember something permanently, wrap the memory in <memory>content</memory> tags in your response. Example: "Got it! I'll remember that 🧠 <memory>User is in grade 8</memory>"
+- Keep memory content concise and in third person (e.g. "User is in grade 8" not "I am in grade 8")
+- Only save memory when explicitly asked by the user"""
 
 # ── INTENT DETECTION ──────────────────────────────────────
 # Much stricter — requires clear mathematical structure,
@@ -153,15 +156,22 @@ def call_newton(operation: str, expression: str) -> str | None:
 
 # ── GROQ CALL WITH MEMORY ─────────────────────────────────
 def call_groq(user_message: str, computed_answer: str | None,
-              subject: str, history: list, username: str = None) -> str:
+              subject: str, history: list, 
+              username: str = None, memory: list = None) -> str:
 
     if computed_answer:
         augmented = f"{user_message}\n~[A: {computed_answer}]~"
     else:
         augmented = f"{user_message}\n~[A:]~"
 
-    subject_context = f"The student is currently studying: {subject}." if subject else ""
+    subject_context  = f"The student is currently studying: {subject}." if subject else ""
     username_context = f"The student's username is: {username}." if username else ""
+    
+    # Inject memory into system prompt
+    memory_context = ""
+    if memory:
+        memory_lines = "\n".join(f"• {m['content']}" for m in memory)
+        memory_context = f"\n\nPermanent memory about this student:\n{memory_lines}"
 
     messages = [
         {
@@ -169,17 +179,16 @@ def call_groq(user_message: str, computed_answer: str | None,
             "content": SYSTEM_PROMPT
                 + (f"\n\n{subject_context}" if subject_context else "")
                 + (f"\n{username_context}" if username_context else "")
+                + memory_context
         }
     ]
 
-    # Add conversation history (last 10 messages max to stay within token limits)
     for msg in history[-10:]:
         role    = "assistant" if msg.get("role") == "ai" else "user"
         content = msg.get("content", "").strip()
         if content:
             messages.append({ "role": role, "content": content })
 
-    # Add current user message
     messages.append({ "role": "user", "content": augmented })
 
     response = groq_client.chat.completions.create(
@@ -193,43 +202,58 @@ def call_groq(user_message: str, computed_answer: str | None,
     response_text = re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
     return response_text
 
-
 # ── MAIN CHAT ROUTE ───────────────────────────────────────
 @app.route('/chat', methods=['POST'])
 def chat():
-    body    = request.get_json()
-    message = (body.get('message') or '').strip()
-    subject = body.get('subject', 'General')
-    history = body.get('history', [])   # array of { role, content }
-    user_id = body.get('user_id', None) # for future account isolation
+    body     = request.get_json()
+    message  = (body.get('message') or '').strip()
+    subject  = body.get('subject', 'General')
+    history  = body.get('history', [])
+    user_id  = body.get('user_id', None)
     username = body.get('username', None)
+    memory   = body.get('memory', [])  # ← array of { id, content }
 
     if not message:
         return jsonify({ 'error': 'Empty message' }), 400
 
-    # 1. Detect intent
     intent = detect_intent(message)
     print(f"[{user_id or 'guest'}] Intent: {intent['type']} | Msg: {message[:60]}")
 
-    # 2. If math → call Newton
     computed_answer = None
     if intent['type'] == 'math' and intent['expression']:
         computed_answer = call_newton(intent['operation'], intent['expression'])
         print(f"Newton result: {computed_answer}")
 
-    # 3. Call Groq with history
     try:
-        response_text = call_groq(message, computed_answer, subject, history, username)
+        response_text = call_groq(message, computed_answer, subject, history, username, memory)
     except Exception as e:
         print(f"Groq error: {e}")
         return jsonify({ 'unknown': True }), 200
 
-    # 4. Check for UNKNOWN signal
-    if response_text.strip().upper() == 'UNKNOWN':
+    # Check for memory tag in response
+    new_memory = extract_memory(response_text)
+    # Strip memory tags before sending to frontend
+    clean_response = strip_memory_tags(response_text)
+
+    if clean_response.strip().upper() == 'UNKNOWN':
         return jsonify({ 'unknown': True })
 
-    return jsonify({ 'response': response_text })
+    return jsonify({ 
+        'response': clean_response,
+        'new_memory': new_memory  # ← send back to frontend to save
+    })
 
+# ── MEMORY EXTRACTION ─────────────────────────
+def extract_memory(response_text: str) -> str | None:
+    """Detects <memory>...</memory> tags in Axiom's response."""
+    match = re.search(r'<memory>([\s\S]*?)</memory>', response_text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+def strip_memory_tags(text: str) -> str:
+    """Removes <memory>...</memory> tags from response before sending to frontend."""
+    return re.sub(r'<memory>[\s\S]*?</memory>', '', text).strip()
 
 # ── HEALTH CHECK ──────────────────────────────────────────
 @app.route('/health', methods=['GET'])
