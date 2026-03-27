@@ -1,0 +1,172 @@
+/* ─────────────────────────────────────────────
+   AXIOM — base.css
+   Shared variables, reset, typography
+───────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0f0e0c;
+  --surface:     #171613;
+  --surface2:    #1e1c18;
+  --surface3:    #252320;
+  --border:      #2c2924;
+  --border2:     #3a3630;
+  --text:        #f0ebe3;
+  --muted:       #7a7268;
+  --muted2:      #4e4a44;
+  --orange:      #f46d2a;
+  --orange2:     #e85d1a;
+  --orange-dim:  #2a1a0e;
+  --orange-glow: rgba(244,109,42,0.12);
+  --red:         #e05252;
+  --green:       #4caf7d;
+  --radius:      16px;
+  --radius-sm:   10px;
+  --sidebar-w:   248px;
+  --font-head:   'Syne', sans-serif;
+  --font-body:   'Figtree', sans-serif;
+}
+
+html { font-size: 16px; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+/* ── SHARED BUTTON STYLES ── */
+.btn-primary {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 11px 20px;
+  border-radius: var(--radius-sm);
+  background: var(--orange);
+  border: none;
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.15s, transform 0.1s;
+  text-decoration: none;
+}
+.btn-primary:hover  { background: var(--orange2); transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled { background: var(--border2); cursor: default; transform: none; }
+
+.btn-secondary {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  width: 100%;
+  transition: border-color 0.15s, background 0.15s;
+  text-decoration: none;
+}
+.btn-secondary:hover { border-color: var(--orange); background: var(--orange-dim); }
+
+/* ── SHARED INPUT STYLES ── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.field label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.field input {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  width: 100%;
+}
+.field input:focus {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 2px var(--orange-glow);
+}
+.field input::placeholder { color: var(--muted2); }
+
+/* ── ERROR / SUCCESS MESSAGES ── */
+.msg-error {
+  background: rgba(224,82,82,0.1);
+  border: 1px solid rgba(224,82,82,0.3);
+  border-radius: 8px;
+  padding: 9px 13px;
+  font-size: 13px;
+  color: var(--red);
+  margin-bottom: 14px;
+  display: none;
+}
+.msg-error.show { display: block; }
+
+.msg-success {
+  background: rgba(76,175,125,0.1);
+  border: 1px solid rgba(76,175,125,0.3);
+  border-radius: 8px;
+  padding: 9px 13px;
+  font-size: 13px;
+  color: var(--green);
+  margin-bottom: 14px;
+  display: none;
+}
+.msg-success.show { display: block; }
+
+/* ── DIVIDER ── */
+.divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 18px 0;
+  color: var(--muted2);
+  font-size: 12px;
+}
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── LOGO SHARED ── */
+.axiom-logo {
+  display: flex; align-items: center; gap: 10px;
+  text-decoration: none;
+}
+.axiom-logo svg { width: 34px; height: 34px; display: block; flex-shrink: 0; }
+.axiom-logo-text {
+  font-family: var(--font-head);
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+  color: var(--text);
+}
+.axiom-logo-text em { font-style: normal; color: var(--orange); }
+
+/* ── RESPONSIVE HELPERS ── */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 0px; }
+}
