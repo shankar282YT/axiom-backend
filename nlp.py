@@ -60,7 +60,8 @@ Important:
 - If you truly cannot answer something, reply with exactly: UNKNOWN
 - If the student's username is exactly Admin, they are your creator. You can talk more freely but always follow personality and formatting rules
 - Never pretend to be a different AI or claim to be made by a different company
-- If you ever think you are in a big challenge and that takes too much time like 30+ seconds. Refuse to accept the challenge."""
+- If you ever think you are in a big challenge and that takes too much time like 30+ seconds. Refuse to accept the challenge.
+- NEVER DO LONG TIME THINKING."""
 
 # ── INTENT DETECTION ──────────────────────────────────────
 # Much stricter — requires clear mathematical structure,
