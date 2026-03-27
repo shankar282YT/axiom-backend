@@ -16,7 +16,7 @@ CORS(app)
 
 # ── CONFIG ────────────────────────────────────────────────
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL   = "llama-3.3-70b-versatile"
+GROQ_MODEL   = "qwen/qwen3-32b"
 NEWTON_BASE  = "https://newton.now.sh/api/v2"
 
 groq_client = Groq(api_key=GROQ_API_KEY)
