@@ -376,7 +376,7 @@ function openModal(type) {
     modalTitle.textContent = 'Settings';
     modalBody.innerHTML = `
       <p><strong>Version</strong><br>Axiom Aurora v1</p>
-      <p><strong>AI Model</strong><br>qwen3-32b via Groq</p>
+      <p><strong>AI Model</strong><br>qwen3 32b via Groq</p>
       <p><strong>Subject Mode</strong><br>Use the pills in the top bar to focus Axiom on a specific subject.</p>
       <p><strong>Shortcuts</strong><br>Enter to send · Shift+Enter for new line</p>
       <p style="color:var(--muted2);font-size:12px;margin-top:16px;">More settings coming in a future update ✦</p>`;
