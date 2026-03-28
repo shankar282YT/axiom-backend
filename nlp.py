@@ -16,7 +16,8 @@ CORS(app)
 
 # ── CONFIG ────────────────────────────────────────────────
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL   = "qwen/qwen3-32b"
+GROQ_MODEL_TEXT   = "qwen/qwen3-32b"          # for text questions
+GROQ_MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"  # for images
 NEWTON_BASE  = "https://newton.now.sh/api/v2"
 
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -197,8 +198,9 @@ def call_newton(operation: str, expression: str) -> str | None:
 
 # ── GROQ CALL WITH MEMORY ─────────────────────────────────
 def call_groq(user_message: str, computed_answer: str | None,
-              subject: str, history: list, 
-              username: str = None, memory: list = None) -> str:
+              subject: str, history: list,
+              username: str = None, memory: list = None,
+              image_url: str = None) -> str:
 
     if computed_answer:
         augmented = f"{user_message}\n~[A: {computed_answer}]~"
@@ -207,11 +209,9 @@ def call_groq(user_message: str, computed_answer: str | None,
 
     subject_context  = f"The student is currently studying: {subject}." if subject else ""
     username_context = f"The student's username is: {username}." if username else ""
-    
-    # Inject memory into system prompt
-    memory_context = ""
+    memory_context   = ""
     if memory:
-        memory_lines = "\n".join(f"• {m['content']}" for m in memory)
+        memory_lines   = "\n".join(f"• {m['content']}" for m in memory)
         memory_context = f"\n\nPermanent memory about this student:\n{memory_lines}"
 
     messages = [
@@ -219,7 +219,7 @@ def call_groq(user_message: str, computed_answer: str | None,
             "role": "system",
             "content": SYSTEM_PROMPT
                 + (f"\n\n{subject_context}" if subject_context else "")
-                + (f"\n{username_context}" if username_context else "")
+                + (f"\n{username_context}"  if username_context else "")
                 + memory_context
         }
     ]
@@ -230,16 +230,32 @@ def call_groq(user_message: str, computed_answer: str | None,
         if content:
             messages.append({ "role": role, "content": content })
 
-    messages.append({ "role": "user", "content": augmented })
+    # Build user message — with or without image
+    if image_url:
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": { "url": image_url }
+                },
+                {
+                    "type": "text",
+                    "text": augmented
+                }
+            ]
+        })
+    else:
+        messages.append({ "role": "user", "content": augmented })
 
     response = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        max_tokens=1024,
-        temperature=0.7,
-    )
+    model=GROQ_MODEL_VISION if image_url else GROQ_MODEL_TEXT,
+    messages=messages,
+    max_tokens=1024,
+    temperature=0.7,
+)
 
-    raw = response.choices[0].message.content.strip()
+    raw           = response.choices[0].message.content.strip()
     response_text = re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
     return response_text
 
@@ -266,7 +282,13 @@ def chat():
         print(f"Newton result: {computed_answer}")
 
     try:
-        response_text = call_groq(message, computed_answer, subject, history, username, memory)
+        image_url = body.get('image_url', None)
+
+        # Pass to call_groq
+        response_text = call_groq(
+            message, computed_answer, subject,
+            history, username, memory, image_url
+        )
     except Exception as e:
         print(f"Groq error: {e}")
         return jsonify({ 'unknown': True }), 200
