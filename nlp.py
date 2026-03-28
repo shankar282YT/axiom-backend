@@ -204,7 +204,7 @@ def call_newton(operation: str, expression: str) -> str | None:
 def call_groq(user_message: str, computed_answer: str | None,
               subject: str, history: list,
               username: str = None, memory: list = None,
-              image_url: str = None) -> str:
+              image_url: str = None, pdf_text: str = None) -> str:
 
     if computed_answer:
         augmented = f"{user_message}\n~[A: {computed_answer}]~"
@@ -233,6 +233,13 @@ def call_groq(user_message: str, computed_answer: str | None,
         content = msg.get("content", "").strip()
         if content:
             messages.append({ "role": role, "content": content })
+
+    if pdf_text:
+        augmented = f"{user_message}\n\n---PDF CONTENT---\n{pdf_text}\n---END PDF---\n~[A:]~"
+    elif computed_answer:
+        augmented = f"{user_message}\n~[A: {computed_answer}]~"
+    else:
+        augmented = f"{user_message}\n~[A:]~"
 
     # Build user message — with or without image
     if image_url:
@@ -286,12 +293,13 @@ def chat():
         print(f"Newton result: {computed_answer}")
 
     try:
+        pdf_text  = body.get('pdf_text', None)
         image_url = body.get('image_url', None)
 
         # Pass to call_groq
         response_text = call_groq(
             message, computed_answer, subject,
-            history, username, memory, image_url
+            history, username, memory, image_url, pdf_text
         )
     except Exception as e:
         print(f"Groq error: {e}")
