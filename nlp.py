@@ -206,7 +206,17 @@ def call_groq(user_message: str, computed_answer: str | None,
               username: str = None, memory: list = None,
               image_url: str = None, pdf_text: str = None) -> str:
 
-    if computed_answer:
+    # Build augmented message
+    if pdf_text:
+        augmented = f"""IMPORTANT: The student has uploaded a PDF. You MUST answer using ONLY the information in this PDF. Do not use your general knowledge.
+
+---PDF CONTENT START---
+{pdf_text}
+---PDF CONTENT END---
+
+Student's question: {user_message}
+~[A:]~"""
+    elif computed_answer:
         augmented = f"{user_message}\n~[A: {computed_answer}]~"
     else:
         augmented = f"{user_message}\n~[A:]~"
@@ -234,42 +244,27 @@ def call_groq(user_message: str, computed_answer: str | None,
         if content:
             messages.append({ "role": role, "content": content })
 
-    if pdf_text:
-        augmented = f"{user_message}\n\n---PDF CONTENT---\n{pdf_text}\n---END PDF---\n~[A:]~"
-    elif computed_answer:
-        augmented = f"{user_message}\n~[A: {computed_answer}]~"
-    else:
-        augmented = f"{user_message}\n~[A:]~"
-
-    # Build user message — with or without image
     if image_url:
         messages.append({
             "role": "user",
             "content": [
-                {
-                    "type": "image_url",
-                    "image_url": { "url": image_url }
-                },
-                {
-                    "type": "text",
-                    "text": augmented
-                }
+                { "type": "image_url", "image_url": { "url": image_url } },
+                { "type": "text", "text": augmented }
             ]
         })
     else:
         messages.append({ "role": "user", "content": augmented })
 
     response = groq_client.chat.completions.create(
-    model=GROQ_MODEL_VISION if image_url else GROQ_MODEL_TEXT,
-    messages=messages,
-    max_tokens=1024,
-    temperature=0.7,
-)
+        model=GROQ_MODEL_VISION if image_url else GROQ_MODEL_TEXT,
+        messages=messages,
+        max_tokens=1024,
+        temperature=0.7,
+    )
 
     raw           = response.choices[0].message.content.strip()
     response_text = re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
     return response_text
-
 # ── MAIN CHAT ROUTE ───────────────────────────────────────
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -336,9 +331,10 @@ def strip_memory_tags(text: str) -> str:
     return re.sub(r'<memory>[\s\S]*?</memory>', '', text).strip()
 
 # ── HEALTH CHECK ──────────────────────────────────────────
+
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({ 'status': 'ok', 'model': GROQ_MODEL })
+    return jsonify({ 'status': 'ok', 'text_model': GROQ_MODEL_TEXT, 'vision_model': GROQ_MODEL_VISION })
 
 
 if __name__ == '__main__':
