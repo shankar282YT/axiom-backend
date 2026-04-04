@@ -4,7 +4,8 @@
 #           user_id isolation for accounts/guest mode,
 #           Tavily web search via Groq tool-use,
 #           Weather (Open-Meteo), Location (reverse geocode),
-#           Date injection from frontend
+#           Date injection from frontend,
+#           Subject APIs: PubChem, NASA, REST Countries, Dictionary
 # ─────────────────────────────────────────────────────────
 
 import os
@@ -21,6 +22,7 @@ CORS(app)
 # ── CONFIG ────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+NASA_API_KEY   = os.environ.get("NASA_API_KEY", "DEMO_KEY")
 
 GROQ_MODEL_TEXT   = "qwen/qwen3-32b"
 GROQ_MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -38,6 +40,10 @@ You are a professional, helpful, and friendly AI study assistant for students.
 About yourself:
 - You have access to a Math API (Newton API) that solves equations and expressions
 - You have access to a web search tool (Tavily) — use it when you need current info, recent events, or anything you're unsure about
+- You have access to real chemical compound data (PubChem) — injected automatically for chemistry questions
+- You have access to real astronomy data (NASA) — injected automatically for space/astronomy questions
+- You have access to real country data (REST Countries) — injected automatically for geography questions
+- You have access to a dictionary (Free Dictionary API) — injected automatically for definition questions
 - You can provide real-time weather and location information when the student asks
 - You always know the current date and time — it is injected into every message
 - You have conversation memory within the same chat session
@@ -53,6 +59,26 @@ When to use web search:
 - Keep search queries short and specific (3-6 words), never paste the full student question
 - After getting results, present information naturally — never dump raw links or snippets
 - Cite sources casually if relevant e.g. "According to recent reports..."
+
+When answering chemistry questions:
+- Chemical data is injected as [ChemData: ...] — use it as the source of truth
+- Present molecular formula, weight, IUPAC name naturally in your explanation
+- Never mention PubChem by name to the student
+
+When answering astronomy questions:
+- Astronomy data is injected as [AstroData: ...] — use it directly
+- For APOD (Astronomy Picture of the Day), describe it enthusiastically
+- Never mention NASA API by name — just say "according to NASA" if needed
+
+When answering geography/country questions:
+- Country data is injected as [CountryData: ...] — use it as the source of truth
+- Present capital, population, currency, region naturally
+- Never mention REST Countries API by name
+
+When answering definition/English questions:
+- Dictionary data is injected as [DictData: ...] — use it as the source of truth
+- Present definition, pronunciation, examples naturally
+- Never mention the Dictionary API by name
 
 When answering weather questions:
 - The weather data is already injected into the message — use it directly
@@ -89,7 +115,7 @@ Important:
 - Use that answer as the solution and explain the steps to reach it in a student-friendly way
 - If ~[A:]~ is empty, solve the problem yourself
 - Never mention the math API or the ~[A:]~ notation to the user
-- Never mention Tavily, Open-Meteo, or any internal tool names to the user
+- Never mention Tavily, Open-Meteo, PubChem, NASA API, REST Countries, or any internal tool names to the user
 - If you truly cannot answer something, reply with exactly: UNKNOWN
 - If the student's username is exactly Admin, they are your creator. You can talk more freely but always follow personality and formatting rules
 - Never pretend to be a different AI or claim to be made by a different company
@@ -177,19 +203,15 @@ def call_tavily(query: str) -> str:
         res.raise_for_status()
         data  = res.json()
         parts = []
-
         if data.get("answer"):
             parts.append(f"Summary: {data['answer']}")
-
         for r in data.get("results", [])[:4]:
-            title   = r.get("title", "")
             snippet = r.get("content", "")
+            title   = r.get("title", "")
             url     = r.get("url", "")
             if snippet:
                 parts.append(f"• {title}: {snippet} ({url})")
-
         return "\n".join(parts) if parts else "No results found."
-
     except Exception as e:
         print(f"Tavily error: {e}")
         return "Web search failed."
@@ -221,22 +243,14 @@ def call_openmeteo(lat: float, lon: float) -> str:
             timeout=8
         )
         res.raise_for_status()
-        data    = res.json()
-        current = data.get("current", {})
-
-        temp       = current.get("temperature_2m", "?")
-        feels_like = current.get("apparent_temperature", "?")
-        humidity   = current.get("relative_humidity_2m", "?")
-        windspeed  = current.get("windspeed_10m", "?")
-        wcode      = current.get("weathercode", 0)
-        condition  = WMO_CODES.get(wcode, "Unknown")
-
-        return (
-            f"Temperature: {temp}°C (feels like {feels_like}°C) | "
-            f"Condition: {condition} | "
-            f"Humidity: {humidity}% | "
-            f"Wind: {windspeed} km/h"
-        )
+        current   = res.json().get("current", {})
+        temp      = current.get("temperature_2m", "?")
+        feels     = current.get("apparent_temperature", "?")
+        humidity  = current.get("relative_humidity_2m", "?")
+        wind      = current.get("windspeed_10m", "?")
+        condition = WMO_CODES.get(current.get("weathercode", 0), "Unknown")
+        return (f"Temperature: {temp}°C (feels like {feels}°C) | "
+                f"Condition: {condition} | Humidity: {humidity}% | Wind: {wind} km/h")
     except Exception as e:
         print(f"Open-Meteo error: {e}")
         return "Weather data unavailable."
@@ -252,46 +266,286 @@ def reverse_geocode(lat: float, lon: float) -> str:
             timeout=6
         )
         res.raise_for_status()
-        data    = res.json()
-        address = data.get("address", {})
-        city    = (address.get("city") or address.get("town")
-                   or address.get("village") or "Unknown city")
-        state   = address.get("state", "")
-        country = address.get("country", "")
-        return ", ".join(filter(None, [city, state, country]))
+        a    = res.json().get("address", {})
+        city = a.get("city") or a.get("town") or a.get("village") or "Unknown"
+        return ", ".join(filter(None, [city, a.get("state", ""), a.get("country", "")]))
     except Exception as e:
         print(f"Geocode error: {e}")
         return "Location unavailable."
 
 
-# ── TAG PARSING & INJECTION ───────────────────────────────
-# Tags appended by frontend:
-#   <weather/19.076,72.877>          → fetch weather, inject result
-#   <location/Mumbai, Maharashtra, India>  → inject location string
-#   [Date: Saturday, April 05 2026, 10:32 AM IST]  → plain text, no parsing needed
+# ── PUBCHEM (Chemistry) ───────────────────────────────────
+def call_pubchem(compound: str) -> str:
+    try:
+        # Get CID first
+        search = requests.get(
+            f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{requests.utils.quote(compound)}/cids/JSON",
+            timeout=8
+        )
+        search.raise_for_status()
+        cid = search.json()["IdentifierList"]["CID"][0]
 
+        # Get properties
+        props = requests.get(
+            f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/"
+            f"MolecularFormula,MolecularWeight,IUPACName,InChIKey/JSON",
+            timeout=8
+        )
+        props.raise_for_status()
+        p = props.json()["PropertyTable"]["Properties"][0]
+
+        return (
+            f"Name: {compound} | "
+            f"Formula: {p.get('MolecularFormula', '?')} | "
+            f"Molecular Weight: {p.get('MolecularWeight', '?')} g/mol | "
+            f"IUPAC Name: {p.get('IUPACName', '?')} | "
+            f"PubChem CID: {cid}"
+        )
+    except Exception as e:
+        print(f"PubChem error: {e}")
+        return None
+
+
+# ── NASA ──────────────────────────────────────────────────
+def call_nasa_apod() -> str:
+    """Astronomy Picture of the Day."""
+    try:
+        res = requests.get(
+            "https://api.nasa.gov/planetary/apod",
+            params={ "api_key": NASA_API_KEY },
+            timeout=8
+        )
+        res.raise_for_status()
+        d = res.json()
+        return (
+            f"Title: {d.get('title', '?')} | "
+            f"Date: {d.get('date', '?')} | "
+            f"Explanation: {d.get('explanation', '?')[:400]}..."
+        )
+    except Exception as e:
+        print(f"NASA APOD error: {e}")
+        return None
+
+
+def call_nasa_bodies(body: str) -> str:
+    """Solar system body data via Le Système Solaire API (free, no key)."""
+    try:
+        res = requests.get(
+            f"https://api.le-systeme-solaire.net/rest/bodies/{requests.utils.quote(body.lower())}",
+            timeout=8
+        )
+        res.raise_for_status()
+        d = res.json()
+        mass      = d.get("mass", {})
+        mass_str  = f"{mass.get('massValue', '?')} × 10^{mass.get('massExponent', '?')} kg" if mass else "?"
+        return (
+            f"Body: {d.get('englishName', body)} | "
+            f"Type: {d.get('bodyType', '?')} | "
+            f"Mass: {mass_str} | "
+            f"Mean Radius: {d.get('meanRadius', '?')} km | "
+            f"Gravity: {d.get('gravity', '?')} m/s² | "
+            f"Moons: {d.get('moons') and len(d['moons']) or 0}"
+        )
+    except Exception as e:
+        print(f"NASA Bodies error: {e}")
+        return None
+
+
+# ── REST COUNTRIES (Geography) ────────────────────────────
+def call_restcountries(country: str) -> str:
+    try:
+        res = requests.get(
+            f"https://restcountries.com/v3.1/name/{requests.utils.quote(country)}",
+            params={ "fields": "name,capital,population,region,subregion,currencies,languages,flags,area" },
+            timeout=8
+        )
+        res.raise_for_status()
+        d          = res.json()[0]
+        name       = d.get("name", {}).get("common", country)
+        capital    = ", ".join(d.get("capital", ["?"])) or "?"
+        population = f"{d.get('population', 0):,}"
+        region     = d.get("region", "?")
+        subregion  = d.get("subregion", "")
+        area       = f"{d.get('area', '?'):,} km²"
+        currencies = ", ".join(
+            f"{v.get('name', k)} ({v.get('symbol', '')})"
+            for k, v in (d.get("currencies") or {}).items()
+        ) or "?"
+        languages  = ", ".join((d.get("languages") or {}).values()) or "?"
+
+        return (
+            f"Country: {name} | Capital: {capital} | "
+            f"Population: {population} | Region: {region}"
+            + (f", {subregion}" if subregion else "") +
+            f" | Area: {area} | Currency: {currencies} | Languages: {languages}"
+        )
+    except Exception as e:
+        print(f"REST Countries error: {e}")
+        return None
+
+
+# ── FREE DICTIONARY (English) ─────────────────────────────
+def call_dictionary(word: str) -> str:
+    try:
+        res = requests.get(
+            f"https://api.dictionaryapi.dev/api/v2/entries/en/{requests.utils.quote(word.lower())}",
+            timeout=8
+        )
+        res.raise_for_status()
+        entry    = res.json()[0]
+        phonetic = entry.get("phonetic", "")
+        parts    = []
+
+        for meaning in entry.get("meanings", [])[:2]:   # max 2 parts of speech
+            pos  = meaning.get("partOfSpeech", "")
+            defs = meaning.get("definitions", [])[:2]   # max 2 definitions each
+            for d in defs:
+                defn    = d.get("definition", "")
+                example = d.get("example", "")
+                entry_  = f"[{pos}] {defn}"
+                if example:
+                    entry_ += f' (e.g. "{example}")'
+                parts.append(entry_)
+
+        synonyms = []
+        for meaning in entry.get("meanings", []):
+            synonyms += meaning.get("synonyms", [])[:3]
+
+        result = f"Word: {word}"
+        if phonetic:
+            result += f" | Pronunciation: {phonetic}"
+        result += " | " + " • ".join(parts[:3])
+        if synonyms:
+            result += f" | Synonyms: {', '.join(synonyms[:5])}"
+        return result
+    except Exception as e:
+        print(f"Dictionary error: {e}")
+        return None
+
+
+# ── SUBJECT API INTENT DETECTION ─────────────────────────
+# Patterns to detect which subject API to call
+
+CHEM_PATTERNS = [
+    r'\b(what is|tell me about|properties of|formula of|structure of|explain)\b.{0,30}\b(h2o|co2|nacl|hcl|h2so4|glucose|caffeine|ethanol|methane|oxygen|hydrogen|nitrogen|carbon dioxide|sodium chloride|sulfuric acid|ammonia|benzene)\b',
+    r'\b(molecular formula|molecular weight|iupac name|chemical formula|molar mass)\b.{0,40}',
+    r'\b(what is|tell me about|properties of)\s+([A-Z][a-z]*\d*)+\b',  # chemical names
+]
+
+CHEM_COMPOUND_RE = re.compile(
+    r'\b(h2o|co2|nacl|hcl|h2so4|glucose|caffeine|ethanol|methane|oxygen|hydrogen|'
+    r'nitrogen|carbon dioxide|sodium chloride|sulfuric acid|ammonia|benzene|water|'
+    r'salt|alcohol|acetone|urea|aspirin|chlorine|fluorine|ozone)\b',
+    re.IGNORECASE
+)
+
+ASTRO_BODIES = [
+    'sun', 'moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn',
+    'uranus', 'neptune', 'pluto', 'earth', 'asteroid', 'comet',
+    'milky way', 'black hole', 'neutron star', 'supernova'
+]
+ASTRO_PATTERNS = [
+    r'\b(astronomy picture|apod|picture of the day)\b',
+    r'\b(tell me about|what is|facts about|info on)\s+(' + '|'.join(ASTRO_BODIES) + r')\b',
+    r'\b(planet|solar system|galaxy|universe|space|orbit|constellation)\b',
+]
+
+COUNTRY_PATTERNS = [
+    r'\b(capital of|population of|currency of|language of|facts about|tell me about|where is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b',
+    r'\b(what country|which country|country called)\b',
+]
+COUNTRY_NAME_RE = re.compile(
+    r'\b(?:capital of|population of|currency of|language of|facts about|tell me about|where is|about)\s+'
+    r'([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)',
+)
+
+DICT_PATTERNS = [
+    r'\b(define|definition of|what does|meaning of|what is the meaning)\b.{0,20}\b\w+\b',
+    r'\bwhat does\s+\w+\s+mean\b',
+    r'\bsynonyms? (of|for)\b',
+]
+DICT_WORD_RE = re.compile(
+    r'\b(?:define|definition of|what does|meaning of|what is the meaning of|synonyms? (?:of|for))\s+([a-zA-Z]+)',
+    re.IGNORECASE
+)
+
+def detect_subject_api(message: str) -> dict | None:
+    """Returns { api, param } or None if no subject API needed."""
+    msg_lower = message.lower()
+
+    # Chemistry
+    chem_match = CHEM_COMPOUND_RE.search(msg_lower)
+    if chem_match:
+        return { 'api': 'chemistry', 'param': chem_match.group(0) }
+
+    # Astronomy — APOD
+    if re.search(r'\b(astronomy picture|apod|picture of the day)\b', msg_lower):
+        return { 'api': 'nasa_apod', 'param': None }
+
+    # Astronomy — solar body
+    for body in ASTRO_BODIES:
+        if re.search(rf'\b{re.escape(body)}\b', msg_lower):
+            if re.search(r'\b(tell me|what is|facts|info|about|explain|describe)\b', msg_lower):
+                return { 'api': 'nasa_body', 'param': body }
+
+    # Geography — country
+    country_match = COUNTRY_NAME_RE.search(message)
+    if country_match:
+        return { 'api': 'country', 'param': country_match.group(1) }
+
+    # Dictionary
+    dict_match = DICT_WORD_RE.search(message)
+    if dict_match:
+        word = dict_match.group(1)
+        # Don't waste dict API on very common words Groq knows fine
+        if len(word) > 3:
+            return { 'api': 'dictionary', 'param': word }
+
+    return None
+
+
+def call_subject_api(api: str, param: str | None) -> str | None:
+    if api == 'chemistry':
+        return call_pubchem(param)
+    elif api == 'nasa_apod':
+        return call_nasa_apod()
+    elif api == 'nasa_body':
+        return call_nasa_bodies(param)
+    elif api == 'country':
+        return call_restcountries(param)
+    elif api == 'dictionary':
+        return call_dictionary(param)
+    return None
+
+# Label used to inject subject data into the message
+API_LABELS = {
+    'chemistry':  'ChemData',
+    'nasa_apod':  'AstroData',
+    'nasa_body':  'AstroData',
+    'country':    'CountryData',
+    'dictionary': 'DictData',
+}
+
+# ── TAG PARSING (weather/location) ───────────────────────
 WEATHER_TAG_RE  = re.compile(r'<weather/([-\d.]+),([-\d.]+)>')
 LOCATION_TAG_RE = re.compile(r'<location/([^>]+)>')
 
 def resolve_tags(message: str) -> str:
-    """Replace frontend tags with plain-text context Groq can understand."""
-
     def replace_weather(m):
         lat, lon = float(m.group(1)), float(m.group(2))
-        weather  = call_openmeteo(lat, lon)
-        print(f"[Weather] {lat},{lon} → {weather}")
-        return f"[Current weather at student's location: {weather}]"
+        result   = call_openmeteo(lat, lon)
+        print(f"[Weather] {lat},{lon} → {result}")
+        return f"[Current weather at student's location: {result}]"
 
     def replace_location(m):
-        place = m.group(1).strip()
-        return f"[Student's current location: {place}]"
+        return f"[Student's current location: {m.group(1).strip()}]"
 
     message = WEATHER_TAG_RE.sub(replace_weather, message)
     message = LOCATION_TAG_RE.sub(replace_location, message)
     return message
 
 
-# ── INTENT DETECTION ──────────────────────────────────────
+# ── INTENT DETECTION (math) ───────────────────────────────
 STRICT_MATH_PATTERNS = [
     r'^\s*[\d\w\s\+\-\*\/\^\(\)=]+\s*=\s*[\d\w\s\+\-\*\/\^\(\)]+\s*$',
     r'\d+\s*[xXyY]\s*[\+\-\*\/=]',
@@ -313,9 +567,9 @@ NOT_MATH_PHRASES = [
 ]
 
 NEWTON_OPERATIONS = {
-    'simplify':  'simplify', 'factor':    'factor',
-    'derive':    'derive',   'integrate': 'integrate',
-    'zeroes':    'zeroes',
+    'simplify': 'simplify', 'factor':    'factor',
+    'derive':   'derive',   'integrate': 'integrate',
+    'zeroes':   'zeroes',
     'cos': 'cos', 'sin': 'sin', 'tan': 'tan',
     'arccos': 'arccos', 'arcsin': 'arcsin', 'arctan': 'arctan',
     'abs': 'abs', 'log': 'log',
@@ -367,8 +621,7 @@ def call_newton(operation: str, expression: str) -> str | None:
         url = f"{NEWTON_BASE}/{operation}/{requests.utils.quote(expression)}"
         res = requests.get(url, timeout=8)
         res.raise_for_status()
-        data   = res.json()
-        result = str(data.get('result', '')).strip()
+        result = str(res.json().get('result', '')).strip()
         return result if result and result != 'undefined' else None
     except Exception as e:
         print(f"Newton API error: {e}")
@@ -377,12 +630,17 @@ def call_newton(operation: str, expression: str) -> str | None:
 
 # ── GROQ CALL ─────────────────────────────────────────────
 def call_groq(user_message: str, computed_answer: str | None,
+              subject_data: str | None, subject_label: str | None,
               subject: str, history: list,
               username: str = None, memory: list = None,
               image_url: str = None, pdf_text: str = None) -> str:
 
-    # Resolve <weather/> and <location/> tags → plain text context
+    # Resolve <weather/> and <location/> tags
     resolved_message = resolve_tags(user_message)
+
+    # Append subject API data if available
+    if subject_data and subject_label:
+        resolved_message += f"\n[{subject_label}: {subject_data}]"
 
     # Build augmented message
     if pdf_text:
@@ -431,7 +689,6 @@ def call_groq(user_message: str, computed_answer: str | None,
     else:
         messages.append({ "role": "user", "content": augmented })
 
-    # Vision model doesn't support tools
     use_tools = not image_url and not pdf_text
 
     kwargs = dict(
@@ -449,7 +706,6 @@ def call_groq(user_message: str, computed_answer: str | None,
     finish   = choice.finish_reason
     msg_obj  = choice.message
 
-    # Handle Tavily tool call
     if finish == "tool_calls" and msg_obj.tool_calls:
         tool_call = msg_obj.tool_calls[0]
         args      = json.loads(tool_call.function.arguments)
@@ -504,7 +760,7 @@ def chat():
     if not message:
         return jsonify({ 'error': 'Empty message' }), 400
 
-    # Strip tags before intent detection so math still works cleanly
+    # Strip injected tags before intent detection
     clean_for_intent = re.sub(r'<weather/[^>]+>', '', message)
     clean_for_intent = re.sub(r'<location/[^>]+>', '', clean_for_intent)
     clean_for_intent = re.sub(r'\[Date:[^\]]+\]', '', clean_for_intent).strip()
@@ -512,18 +768,31 @@ def chat():
     intent = detect_intent(clean_for_intent)
     print(f"[{user_id or 'guest'}] Intent: {intent['type']} | Msg: {message[:80]}")
 
+    # Math
     computed_answer = None
     if intent['type'] == 'math' and intent['expression']:
         computed_answer = call_newton(intent['operation'], intent['expression'])
         print(f"Newton result: {computed_answer}")
+
+    # Subject API
+    subject_data  = None
+    subject_label = None
+    subject_api   = detect_subject_api(clean_for_intent)
+    if subject_api:
+        api_name      = subject_api['api']
+        api_param     = subject_api['param']
+        subject_label = API_LABELS.get(api_name)
+        subject_data  = call_subject_api(api_name, api_param)
+        print(f"[SubjectAPI] {api_name}({api_param}) → {str(subject_data)[:80]}")
 
     try:
         pdf_text  = body.get('pdf_text', None)
         image_url = body.get('image_url', None)
 
         response_text = call_groq(
-            message, computed_answer, subject,
-            history, username, memory, image_url, pdf_text
+            message, computed_answer,
+            subject_data, subject_label,
+            subject, history, username, memory, image_url, pdf_text
         )
     except Exception as e:
         print(f"Groq error: {e}")
@@ -554,6 +823,10 @@ def health():
         'web_search':   bool(TAVILY_API_KEY),
         'weather':      True,
         'datetime':     True,
+        'nasa':         NASA_API_KEY != "DEMO_KEY",
+        'pubchem':      True,
+        'countries':    True,
+        'dictionary':   True,
     })
 
 
